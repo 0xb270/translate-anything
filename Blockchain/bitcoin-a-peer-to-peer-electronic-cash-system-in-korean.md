@@ -1,4 +1,4 @@
-[Original](https://bitcoin.org/bitcoin.pdf)
+[Original](./original/bitcoin.pdf)
 
 # 비트코인: 개인간 전자 화폐 체계
 사토시 나카모토  
