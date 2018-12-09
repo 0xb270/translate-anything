@@ -7,3 +7,4 @@ This is a project that translate computer topic documents, posts, papers, ..., e
 
 ## Topics
 * [Blockchain](./Blockchain)
+* [Cybersecurity](./Cybersecurity)
