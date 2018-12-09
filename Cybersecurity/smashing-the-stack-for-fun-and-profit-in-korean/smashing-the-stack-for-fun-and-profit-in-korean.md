@@ -92,3 +92,105 @@ memory                                                                          
 top of                                                                              bottom of
 stack                                                                                   stack
 ```
+
+## *버퍼 오버플로우*
+버퍼 오버플로우는 버퍼에 한게보다 더 많은 데이터를 담은 결과이다. 이렇게 종종 발견되는 프로그래밍 오류를 임의 코드를 실행하는 데 이용할 수 있을까? 또다른 예제를 보자:
+  
+**[`example2.c`](./files/example2.c)**
+```c
+void function(char *str){
+	char bufer[16];
+	
+	strcpy(buffer, str);
+}
+
+void main() {
+	char large_string[256];
+	int i;
+	
+	for( i = 0; i < 255; i++)
+		large_string[i] = 'A';
+	
+	function(large_string);
+}
+```
+
+이 프로그램은 전형적인 버퍼 오버플로우 코딩 오류가 있는 함수를 가진다. 이 함수는 `strncpy()` 대신 `strcpy()`를 사용하여 매개변수로 받은 문자열을 경계 검사 없이 복사한다. 이 프로그램을 실행한다면 세분화 위반(segmentation violation)을 일으킬 것이다. 함수 호출 시 스택의 모습을 살펴보자:
+
+```
+bottom of                                                   top of
+memory                                                      memory
+          buffer                  sfp      ret      *str      
+<------  [ ++++ ++++ ++++ ++++ ] [ ++++ ] [ ++++ ] [ ++++ ]
+
+top of                                                      bottom of
+stack                                                       stack
+```
+
+무슨 일이 벌어지는 것일까? 왜 세분화 위반(segmentation violation)이 일어날까? 간단하다. `strcpy()`는 `*str`(`larger_string[]`)의 내용을 `buffer[]`로 null 문자를 만날 때까지 복사한다. `buffer[]`가 `*str`보다 매우 작은 것을 알 수 있다. `buffer[]`는 `16 bytes` 길이이고, 이를 `256 bytes`로 채우려고 했다. 이는 스택 안 버퍼 뒤의 `240 bytes`가 덮어씌워졌다는 것을 뜻한다. 여기에 `SFP`, `RET`, 심지어 `*str`까지 포함된다. `large_string`에 `A` 문자를 채웠다. 이는 hex 값으로 `0x41`이다. 이는 리턴 주소가 `0x41414141`이 되었다는 것이다. 이는 프로세스 주소 공간을 벗어난다. 이것이 함수가 종료하고 그 주소에서 다음 명령어를 읽으려고 할 때 세분화 위반(segmentation violation)을 일으키는 이유이다. 그래서 버퍼 오버플로우는 함수의 리턴 주소를 바꿀 수 있게 한다. 이렇게 프로그램의 실행의 흐름을 바꿀 수 있다. 첫번째 예제로 돌아가서 스택의 모습을 다시 한번 떠올려보자:
+
+```
+bottom of                                                                               top of
+memory                                                                                  memory
+          buffer2            buffer1       sfp      ret      a        b        c
+<------  [ ++++ ++++ ++++ ] [ ++++ ++++ ] [ ++++ ] [ ++++ ] [ ++++ ] [ ++++ ] [ ++++ ]
+
+top of                                                                              bottom of
+stack                                                                                   stack
+```
+
+첫번째 예제를 수정하여 리턴 주소를 덮어쓰고, 어떻게 임의 코드를 실행할 수 있는지 증명해보자. 스택의 `buffer1[]` 이전이 `SFP`이고, 그 이전은 리턴 주소이다. 이는 `buffer1[]`에서 `4 bytes`만큼 떨어져 있다.  하지만 `buffer1[]`이 실제로는 `2 word`, 즉 `8 bytes`만큼의 길이라는 것을 기억해야 한다. 따라서 리턴 주소는 `buffer1[]`의 시작 주소로부터 `12 bytes`만큼 떨어져 있다. 리턴값을 수정하여 함수 호출 후 할당문 `x = 1;`를 건너뛰도록 해볼 것이다. 이를 위해 리턴 주소로 `10 bytes`를 더한다.  
+  
+**[`example3.c`](./files/example3.c)**
+```c
+void function(int a, int b, int c) {
+    char buffer1[5];
+    char buffer2[10];
+    int *ret;
+
+    ret = buffer1 + 12; // ret는 buffer1[]으로부터 12 bytes 만큼 떨어져 있다.
+    (*ret) += 10;
+}
+
+void main() {
+    int x;
+
+    x = 0;
+    function(1, 2, 3);
+    x = 1;
+    printf("%d\n", x);
+}
+```
+
+코드에 추가한 것은 `buffer1[]`의 주소에 `12`를 더한 것이다. 이 새로운 주소는 리턴 주소가 저장된 곳이다. 우리는 할당문을 건너뛰고 `printf` 호출로 가고 싶다. 리턴 주소에 `10`을 더하는 것은 어떻게 알아낸 것인가? 컴파일 후 gdb로 살펴보았다:
+
+```
+[aleph1]$ gdb example3
+GDB ...
+...
+...
+(no debugging symbols found)...
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x8000490 :     pushl    %ebp
+0x8000491 :     movl     %esp, %ebp
+0x8000493 :     subl     $0x4, %esp
+0x8000496 :     movl     $0x0, 0xfffffffc(%ebp)
+0x800049d :     pushl    $0x3
+0x800049f :     pushl    $0x2
+0x80004a1 :     pushl    $0x1
+0x80004a3 :     call     0x8000470
+0x80004a8 :     addl     $0xc, %esp              # the value that the RET will be.
+0x80004ab :     movl     $0x1, 0xfffffffc(%ebp)  # the assignment we want to jump past. 
+0x80004b2 :     movl     0xfffffffc(%ebp), %eax  # the next instruction we want to execute.
+0x80004b5 :     pushl    %eax
+0x80004b6 :     pushl    $0x80004f8
+0x80004bb :     call     0x8000378
+0x80004c0 :     addl     $0x8, %esp
+0x80004c3 :     movl     %ebp, %esp
+0x80004c5 :     popl     %ebp
+0x80004c6 :     ret
+0x80004c7 :     nop
+```
+
+`function()` 호출 시 `RET`이 `0x80004a8`이 되는 것을 알 수 있고, 할당문 `0x80004ab`를 건너뛰고 싶다. 우리가 실행하고 싶은 다음 명령어는 `0x80004b2`에 있다. `0x80004b2 - 0x80004a8 = 10 bytes`의 거리임을 알 수 있다.
